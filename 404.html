@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>正在跳转…</title>
+<script>
+(function () {
+  // GitHub Pages 项目站：刷新聊天页等深链接时，服务器没有对应文件，
+  // 会返回这个 404.html。这里把深链接存下来，再跳回应用根；
+  // backend.js 在壳子路由初始化之前会把深链接恢复，刷新后仍回到原会话。
+  try {
+    sessionStorage.setItem('ds_redirect_path',
+      location.pathname + location.search + location.hash);
+  } catch (e) { /* ignore */ }
+  // 应用根是 URL 的第一段（仓库名），如 /llm-chat/
+  var seg = location.pathname.split('/').filter(Boolean)[0] || '';
+  location.replace('/' + seg + '/');
+})();
+</script>
+</head>
+<body>
+<p>正在跳转到应用首页……如果没有自动跳转，请<a id="home" href="./">点这里</a>。</p>
+<script>
+document.getElementById('home').href =
+  '/' + (location.pathname.split('/').filter(Boolean)[0] || '') + '/';
+</script>
+</body>
+</html>
