@@ -520,6 +520,14 @@
 
   /* ---------- 免费网页搜索（浏览器直连，只用允许 CORS 的源） ---------- */
   var searchCache = {}; // query -> {at, results}
+  function fetchWithTimeout(url, ms) {
+    // 搜索源无响应时 12 秒即断，快速换下一个源，不让整轮搜索卡死。
+    var c = new AbortController();
+    var t = setTimeout(function () { try { c.abort(); } catch (e) { /* ignore */ } }, ms);
+    return nativeFetch(url, {headers: {'Accept': 'application/json'}, signal: c.signal})
+      .then(function (r) { clearTimeout(t); return r; },
+            function (e) { clearTimeout(t); throw e; });
+  }
   function ddgUnwrap(href) {
     try {
       if (href.indexOf('/l/?') >= 0) {
@@ -534,7 +542,7 @@
     // （AbstractText / RelatedTopics），没有传统网页列表，聊胜于无。
     var url = 'https://api.duckduckgo.com/?q=' + encodeURIComponent(query) +
               '&format=json&no_html=1&skip_disambig=1';
-    return nativeFetch(url, {headers: {'Accept': 'application/json'}})
+    return fetchWithTimeout(url, 12000)
       .then(function (resp) {
         if (!resp.ok) throw new Error('DDG IA HTTP ' + resp.status);
         return resp.json();
@@ -568,7 +576,7 @@
     var url = 'https://zh.wikipedia.org/w/api.php?action=query&list=search' +
               '&srsearch=' + encodeURIComponent(query) +
               '&format=json&srlimit=' + limit + '&origin=*';
-    return nativeFetch(url, {headers: {'Accept': 'application/json'}})
+    return fetchWithTimeout(url, 12000)
       .then(function (resp) {
         if (!resp.ok) throw new Error('wiki HTTP ' + resp.status);
         return resp.json();
@@ -703,7 +711,7 @@
   /* 调上游 /chat/completions（流式），逐个产出 {content, reasoning, tool_calls}。
      HTTP 错误 / 连接错误抛 UpstreamError(status, message)。
      opts.useProxy：经 corsproxy.io 中转（网关默认配置用）；
-     opts.timeoutMs：初始连接超时（默认 30 秒），超时按上游失败处理；
+     opts.timeoutMs：初始连接超时（默认 60 秒），超时按上游失败处理；
      流式读取阶段 90 秒无数据也按失败处理，避免代理挂死时无限等。 */
   async function* upstreamStream(apiUrl, apiKey, model, messages, tools, forceTool, signal, opts) {
     opts = opts || {};
@@ -749,7 +757,7 @@
     }
     var resp;
     try {
-      armTimeout(opts.timeoutMs || 30000);
+      armTimeout(opts.timeoutMs || 60000);
       resp = await nativeFetch(fetchUrl, {
         method: 'POST', headers: headers,
         body: JSON.stringify(payload), signal: combined.signal
@@ -1040,6 +1048,7 @@
         var searchedRounds = 0;
         var toolsFailed = false;
         var searchRefusalRetried = false;
+        var timeoutRetried = false;
         var forceTool = false;
         while (true) {
           var buffered = []; // [kind, text]，按到达顺序
@@ -1080,6 +1089,11 @@
               notePending = true;
               useGateway = false;
               apiUrl = POLLINATIONS_CFG.url; apiKey = ''; model = POLLINATIONS_CFG.model;
+              continue;
+            }
+            if (!e.status && !timeoutRetried) {
+              // 超时/断连且无 HTTP 状态：免费接口偶发排队慢，只重试一次
+              timeoutRetried = true;
               continue;
             }
             if (e.status) {
